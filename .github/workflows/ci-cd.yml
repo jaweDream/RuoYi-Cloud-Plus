@@ -81,12 +81,11 @@ jobs:
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
     uses: ./.github/workflows/build.yml
     with:
-      module: 'tg-bot-cloud'
+      module: 'ruoyi-gateway'
       image_name: 'tg-bot-cloud'
       image_tag: ${{ github.ref_name }}
       registry_type: ${{ github.event.inputs.registry_type || 'github' }}
       custom_registry: ${{ github.event.inputs.custom_registry }}
-      dockerfile: './ruoyi-gateway/Dockerfile' # 使用一个存在的 Dockerfile 作为示例
     secrets:
       custom_username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
       custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
