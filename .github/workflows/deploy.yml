@@ -1,0 +1,63 @@
+name: Deploy to Environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        type: string
+      service_name:
+        description: '服务名称'
+        required: false
+        type: string
+    secrets:
+      host:
+        required: true
+      username:
+        required: true
+      ssh_key:
+        required: true
+      port:
+        required: false
+      compose_file:
+        required: false
+      deploy_path:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 部署到服务器
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.host }}
+          username: ${{ secrets.username }}
+          key: ${{ secrets.ssh_key }}
+          port: ${{ secrets.port || '22' }}
+          script: |
+            DEPLOY_PATH="${{ secrets.deploy_path || '/opt/tg-bot-cloud' }}"
+            COMPOSE_FILE="${{ secrets.compose_file || 'docker-compose.yml' }}"
+
+            # 确保目录存在
+            mkdir -p $DEPLOY_PATH
+            cd $DEPLOY_PATH
+
+            # 拉取最新镜像
+            docker-compose -f $COMPOSE_FILE pull ${{ inputs.service_name || '' }}
+
+            # 重启服务
+            if [ -z "${{ inputs.service_name }}" ]; then
+              docker-compose -f $COMPOSE_FILE up -d
+            else
+              docker-compose -f $COMPOSE_FILE up -d ${{ inputs.service_name }}
+            fi
+
+            # 清理无用镜像
+            docker image prune -af --filter "until=24h"

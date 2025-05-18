@@ -1,0 +1,393 @@
+name: RuoYi 生产环境版本发布
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号 (例如: 1.2.3)'
+        required: true
+        type: string
+      modules_type:
+        description: '要发布的模块类型'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - modules
+          - visual
+      specific_modules:
+        description: '特定模块列表 (逗号分隔，留空则按模块类型发布全部)'
+        required: false
+        type: string
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: choice
+        options:
+          - github
+          - dockerhub
+          - custom
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      modules_to_release: ${{ steps.set-modules.outputs.modules_to_release }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置版本号
+        id: set-version
+        run: |
+          # 使用标签或手动输入的版本号
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            # 移除版本号前的'v'
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "使用版本号: ${VERSION}"
+
+      - name: 确定要发布的模块
+        id: set-modules
+        run: |
+          # 根据选择的模块类型和特定模块列表确定要发布的模块
+          MODULES_TYPE="${{ github.event.inputs.modules_type }}"
+          SPECIFIC_MODULES="${{ github.event.inputs.specific_modules }}"
+
+          if [ -n "$SPECIFIC_MODULES" ]; then
+            # 使用指定的模块列表
+            IFS=',' read -ra MODULE_ARRAY <<< "$SPECIFIC_MODULES"
+            MODULES_JSON="["
+            for ((i=0; i<${#MODULE_ARRAY[@]}; i++)); do
+              MODULE="${MODULE_ARRAY[$i]}"
+              # 去除空格
+              MODULE="$(echo "$MODULE" | xargs)"
+              MODULES_JSON+="\"$MODULE\""
+              if [ $i -lt $((${#MODULE_ARRAY[@]}-1)) ]; then
+                MODULES_JSON+=","
+              fi
+            done
+            MODULES_JSON+="]"
+
+          elif [ "$MODULES_TYPE" == "modules" ]; then
+            # 业务模块列表
+            MODULES_JSON='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
+
+          elif [ "$MODULES_TYPE" == "visual" ]; then
+            # 动态查找所有visual模块
+            MODULES=()
+            if [ -d "ruoyi-visual" ]; then
+              for dir in ruoyi-visual/*/; do
+                if [ -d "$dir" ]; then
+                  module_name=$(basename "$dir")
+                  # 检查是否存在pom.xml文件
+                  if [ -f "${dir}pom.xml" ]; then
+                    MODULES+=("ruoyi-visual/${module_name}")
+                  fi
+                fi
+              done
+            fi
+
+            # 将数组转换为JSON格式
+            MODULES_JSON="["
+            for ((i=0; i<${#MODULES[@]}; i++)); do
+              MODULES_JSON+="\"${MODULES[$i]}\""
+              if [ $i -lt $((${#MODULES[@]}-1)) ]; then
+                MODULES_JSON+=","
+              fi
+            done
+            MODULES_JSON+="]"
+
+            # 如果没有找到任何模块，设置为一个默认值
+            if [ "$MODULES_JSON" == "[]" ]; then
+              MODULES_JSON='["ruoyi-visual/ruoyi-monitor"]'
+            fi
+
+          else
+            # all类型 - 合并业务模块和visual模块
+            BUSINESS_MODULES='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
+
+            # 动态查找所有visual模块
+            VISUAL_MODULES=()
+            if [ -d "ruoyi-visual" ]; then
+              for dir in ruoyi-visual/*/; do
+                if [ -d "$dir" ]; then
+                  module_name=$(basename "$dir")
+                  # 检查是否存在pom.xml文件
+                  if [ -f "${dir}pom.xml" ]; then
+                    VISUAL_MODULES+=("ruoyi-visual/${module_name}")
+                  fi
+                fi
+              done
+            fi
+
+            # 合并模块列表
+            MODULES_JSON=${BUSINESS_MODULES%]}
+
+            if [ ${#VISUAL_MODULES[@]} -gt 0 ]; then
+              MODULES_JSON="${MODULES_JSON},"
+              for ((i=0; i<${#VISUAL_MODULES[@]}; i++)); do
+                MODULES_JSON+="\"${VISUAL_MODULES[$i]}\""
+                if [ $i -lt $((${#VISUAL_MODULES[@]}-1)) ]; then
+                  MODULES_JSON+=","
+                fi
+              done
+            fi
+
+            MODULES_JSON="${MODULES_JSON}]"
+          fi
+
+          echo "modules_to_release=${MODULES_JSON}" >> $GITHUB_OUTPUT
+          echo "将发布以下模块: ${MODULES_JSON}"
+
+  build:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: [ '21' ]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 构建与测试
+        run: mvn -B package --file pom.xml -DskipTests=false
+
+      - name: 缓存Maven包
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: 打包制品
+        run: |
+          mkdir -p artifacts
+          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
+
+      - name: 上传构建制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: artifacts/
+          retention-days: 90
+
+  docker-build:
+    needs: [prepare-release, build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: ${{ fromJSON(needs.prepare-release.outputs.modules_to_release) }}
+      fail-fast: false
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载构建制品
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: artifacts/
+
+      - name: 设置 Docker 登录信息
+        id: login-vars
+        run: |
+          # 设置仓库类型变量
+          if [ "${{ github.event.inputs.registry_type }}" == "github" ] || [ -z "${{ github.event.inputs.registry_type }}" ]; then
+            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+            echo "registry_url=ghcr.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
+            echo "username=${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.registry_type }}" == "dockerhub" ]; then
+            echo "registry_url=docker.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "username=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.DOCKERHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          else
+            echo "registry_url=${{ github.event.inputs.custom_registry }}" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ github.event.inputs.custom_registry }}/${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "username=${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.CUSTOM_REGISTRY_TOKEN }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 登录到 Docker 仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.login-vars.outputs.registry_url }}
+          username: ${{ steps.login-vars.outputs.username }}
+          password: ${{ steps.login-vars.outputs.password }}
+
+      - name: 准备构建参数
+        id: build-params
+        run: |
+          MODULE="${{ matrix.module }}"
+
+          # 提取模块基本名称
+          if [[ "${MODULE}" == ruoyi-visual/* ]]; then
+            BASE_MODULE=$(basename "${MODULE}")
+          else
+            BASE_MODULE="${MODULE}"
+          fi
+
+          # 确定 Dockerfile 路径
+          if [[ -f "./${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="./${MODULE}/Dockerfile"
+          elif [[ -f "./ruoyi-modules/${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="./ruoyi-modules/${MODULE}/Dockerfile"
+          elif [[ -f "${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="${MODULE}/Dockerfile"
+          else
+            echo "错误: 无法找到模块 ${MODULE} 的 Dockerfile"
+            exit 1
+          fi
+          echo "dockerfile=${DOCKERFILE}" >> $GITHUB_OUTPUT
+          echo "base_module=${BASE_MODULE}" >> $GITHUB_OUTPUT
+
+          # 确定模块目录
+          if [[ "${MODULE}" == ruoyi-* && ! "${MODULE}" =~ ^ruoyi-modules/ && ! "${MODULE}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="./${MODULE}"
+          elif [[ "${MODULE}" =~ ^ruoyi-modules/ || "${MODULE}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="${MODULE}"
+          elif [[ -d "./ruoyi-modules/${MODULE}" ]]; then
+            MODULE_DIR="./ruoyi-modules/${MODULE}"
+          elif [[ -d "./ruoyi-visual/${MODULE}" ]]; then
+            MODULE_DIR="./ruoyi-visual/${MODULE}"
+          else
+            MODULE_DIR="./${MODULE}"
+          fi
+          echo "module_dir=${MODULE_DIR}" >> $GITHUB_OUTPUT
+
+          # 使用准备脚本
+          bash .github/workflows/docker-prepare.sh "${BASE_MODULE}" "${MODULE_DIR}"
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.build-params.outputs.dockerfile }}
+          build-args: |
+            MODULE=${{ steps.build-params.outputs.base_module }}
+            JAR_FILE=./target/${{ steps.build-params.outputs.base_module }}.jar
+          push: true
+          tags: |
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:v${{ needs.prepare-release.outputs.version }}
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:stable
+
+  deploy-production:
+    needs: [prepare-release, docker-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 部署到生产环境
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+
+            # 备份当前部署配置
+            cp docker-compose.yml docker-compose.yml.bak
+
+            # 记录部署版本到历史记录
+            echo "v${{ needs.prepare-release.outputs.version }} - $(date '+%Y-%m-%d %H:%M:%S')" >> deployment-history.txt
+
+            # 更新镜像标签为特定版本
+            VERSION="v${{ needs.prepare-release.outputs.version }}"
+            sed -i -E "s/:latest|:dev-ops|:stable/:$VERSION/g" docker-compose.yml
+
+            # 部署
+            docker-compose pull
+            docker-compose up -d
+
+            # 部署成功后打印状态
+            echo "部署版本 $VERSION 完成"
+            docker-compose ps
+
+  create-release-note:
+    needs: [prepare-release, deploy-production]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 获取上个版本标签
+        id: get-previous-tag
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          PREVIOUS_TAG=$(git tag --sort=-creatordate | grep -v "$CURRENT_TAG" | head -n 1)
+          echo "previous_tag=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+          echo "当前版本: $CURRENT_TAG, 上一版本: $PREVIOUS_TAG"
+
+      - name: 生成变更日志
+        id: changelog
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          PREVIOUS_TAG="${{ steps.get-previous-tag.outputs.previous_tag }}"
+
+          # 如果存在前一个标签，生成自那个标签以来的更改日志
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "从 $PREVIOUS_TAG 到 $CURRENT_TAG 的变更:" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log $PREVIOUS_TAG..$CURRENT_TAG --pretty=format:"* %s (%h)" --reverse >> CHANGELOG.md
+          else
+            echo "首次发布 $CURRENT_TAG" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log --pretty=format:"* %s (%h)" --reverse >> CHANGELOG.md
+          fi
+
+          cat CHANGELOG.md
+
+      - name: 创建GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Release ${{ github.ref_name }}"
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
