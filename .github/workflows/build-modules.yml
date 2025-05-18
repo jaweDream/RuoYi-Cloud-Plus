@@ -50,17 +50,41 @@ jobs:
           cache: maven
 
       - name: Maven 构建
-        run: mvn -B clean package -DskipTests
+        run: |
+          mvn -B clean package -DskipTests
+          echo "检查构建结果和目标目录内容..."
+          find . -name "target" -type d -exec ls -la {} \;
 
       - name: 打包制品
         run: |
           mkdir -p artifacts
           echo "查找编译后的 JAR 文件..."
-          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*"
+          # 查找模块的主要 JAR 文件
+          find ./*/target/ -maxdepth 1 -name "*.jar" -not -name "original-*.jar" -not -name "*-javadoc.jar" -not -name "*-sources.jar" -not -name "test-*" -exec ls -la {} \;
+
+          # 复制所有主要 JAR 文件到 artifacts 目录
           echo "复制 JAR 文件到 artifacts 目录..."
-          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
+          find ./*/target/ -maxdepth 1 -name "*.jar" -not -name "original-*.jar" -not -name "*-javadoc.jar" -not -name "*-sources.jar" -not -name "test-*" -exec cp {} artifacts/ \;
+
+          # 如果上述命令未找到文件，尝试更广泛的搜索
+          if [ ! "$(ls -A artifacts)" ]; then
+            echo "未找到标准位置的 JAR 文件，尝试更广泛的搜索..."
+            find . -name "*.jar" -not -path "*/original-*.jar" -exec cp {} artifacts/ \;
+          fi
+
           echo "检查 artifacts 目录内容:"
           ls -la artifacts/
+
+      - name: 检查构建制品
+        run: |
+          if [ ! "$(ls -A artifacts)" ]; then
+            echo "错误：artifacts 目录为空，没有找到任何 JAR 文件！"
+            echo "检查 Maven 构建步骤是否成功完成，以及模块路径是否正确。"
+            exit 1
+          else
+            echo "找到以下 JAR 文件，准备上传："
+            ls -la artifacts/
+          fi
 
       - name: 上传构建制品
         uses: actions/upload-artifact@v4
