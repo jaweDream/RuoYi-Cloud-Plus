@@ -1,0 +1,217 @@
+name: 简化版微服务模块构建
+
+on:
+  push:
+    branches: [ "dev-ops" ]
+    paths:
+      - 'ruoyi-**/**'
+      - 'pom.xml'
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: '要构建的模块（以逗号分隔，留空则构建所有模块）'
+        required: false
+        type: string
+      image_tag:
+        description: '镜像标签（留空则使用当前分支名或latest）'
+        required: false
+        type: string
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: choice
+        options:
+          - github
+          - dockerhub
+          - custom
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
+
+# 明确设置权限
+permissions:
+  contents: read
+  packages: write  # 允许推送到GHCR
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      modules_json: ${{ steps.set-modules.outputs.modules_json }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置要构建的模块
+        id: set-modules
+        run: |
+          if [ -z "${{ github.event.inputs.modules }}" ]; then
+            # 默认模块列表
+            MODULES_ARRAY='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
+          else
+            # 转换用户输入的逗号分隔列表为JSON数组
+            IFS=',' read -ra MODULE_LIST <<< "${{ github.event.inputs.modules }}"
+            MODULES_ARRAY='['
+            for module in "${MODULE_LIST[@]}"; do
+              if [ "$MODULES_ARRAY" != "[" ]; then
+                MODULES_ARRAY="$MODULES_ARRAY,"
+              fi
+              MODULES_ARRAY="$MODULES_ARRAY\"$module\""
+            done
+            MODULES_ARRAY="$MODULES_ARRAY]"
+          fi
+          echo "modules_json=${MODULES_ARRAY}" >> $GITHUB_OUTPUT
+          echo "将构建以下模块: ${MODULES_ARRAY}"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Maven 构建
+        run: mvn -B clean package -DskipTests
+
+      - name: 打包制品
+        run: |
+          mkdir -p artifacts
+          echo "查找编译后的 JAR 文件..."
+          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
+
+          echo "检查 artifacts 目录内容:"
+          ls -la artifacts/
+
+      - name: 上传构建制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-artifacts
+          path: artifacts/
+          retention-days: 5
+
+  docker-build:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: ${{ fromJSON(needs.prepare.outputs.modules_json) }}
+      fail-fast: false
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载构建制品
+        uses: actions/download-artifact@v4
+        with:
+          name: application-artifacts
+          path: artifacts/
+
+      # 直接在这个文件中处理Docker登录，无需嵌套工作流
+      - name: 设置 Docker 登录信息
+        id: login-vars
+        run: |
+          # 设置仓库类型变量
+          if [ "${{ github.event.inputs.registry_type }}" == "github" ] || [ -z "${{ github.event.inputs.registry_type }}" ]; then
+            echo "registry_url=ghcr.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=ghcr.io/${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+            echo "username=${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.registry_type }}" == "dockerhub" ]; then
+            echo "registry_url=docker.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "username=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.DOCKERHUB_TOKEN }}" >> $GITHUB_OUTPUT
+          else
+            echo "registry_url=${{ github.event.inputs.custom_registry }}" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ github.event.inputs.custom_registry }}/${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "username=${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "password=${{ secrets.CUSTOM_REGISTRY_TOKEN }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 登录到 Docker 仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.login-vars.outputs.registry_url }}
+          username: ${{ steps.login-vars.outputs.username }}
+          password: ${{ steps.login-vars.outputs.password }}
+
+      - name: 准备构建参数
+        id: build-params
+        run: |
+          MODULE="${{ matrix.module }}"
+
+          # 确定 Dockerfile 路径
+          if [[ -f "./${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="./${MODULE}/Dockerfile"
+          elif [[ -f "./ruoyi-modules/${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="./ruoyi-modules/${MODULE}/Dockerfile"
+          elif [[ -f "./ruoyi-visual/${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="./ruoyi-visual/${MODULE}/Dockerfile"
+          else
+            echo "错误: 无法找到模块 ${MODULE} 的 Dockerfile"
+            exit 1
+          fi
+          echo "dockerfile=${DOCKERFILE}" >> $GITHUB_OUTPUT
+
+          # 确定模块目录
+          if [[ "${MODULE}" == ruoyi-* && ! "${MODULE}" =~ ^ruoyi-modules/ && ! "${MODULE}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="./${MODULE}"
+          elif [[ "${MODULE}" =~ ^ruoyi-modules/ ]]; then
+            MODULE_DIR="./${MODULE}"
+          elif [[ "${MODULE}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="./${MODULE}"
+          elif [[ -d "./ruoyi-modules/${MODULE}" ]]; then
+            MODULE_DIR="./ruoyi-modules/${MODULE}"
+          elif [[ -d "./ruoyi-visual/${MODULE}" ]]; then
+            MODULE_DIR="./ruoyi-visual/${MODULE}"
+          else
+            MODULE_DIR="./${MODULE}"
+          fi
+          echo "module_dir=${MODULE_DIR}" >> $GITHUB_OUTPUT
+
+          # 准备JAR文件
+          mkdir -p ${MODULE_DIR}/target/
+          mkdir -p ./target/
+
+          # 寻找JAR文件
+          JAR_FILE=$(find artifacts/ -name "*${MODULE}*.jar" | head -n 1)
+          if [ -z "${JAR_FILE}" ]; then
+            echo "错误: 无法找到模块 ${MODULE} 的 JAR 文件"
+            exit 1
+          fi
+
+          # 复制JAR文件到Dockerfile期望的位置
+          cp ${JAR_FILE} ${MODULE_DIR}/target/${MODULE}.jar
+          cp ${JAR_FILE} ./target/${MODULE}.jar
+
+          echo "找到 JAR 文件: ${JAR_FILE}"
+          echo "已复制到 ${MODULE_DIR}/target/${MODULE}.jar 和 ./target/${MODULE}.jar"
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 构建并推送镜像 - 无需复杂的变量计算和引用
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.build-params.outputs.dockerfile }}
+          build-args: |
+            MODULE=${{ matrix.module }}
+            JAR_FILE=./target/${{ matrix.module }}.jar
+          push: true
+          tags: |
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ matrix.module }}:${{ github.event.inputs.image_tag || github.ref_name }}
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ matrix.module }}:latest
