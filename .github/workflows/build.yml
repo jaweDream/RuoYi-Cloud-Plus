@@ -41,6 +41,10 @@ on:
       custom_token:
         required: false
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   login:
     uses: ./.github/workflows/docker-login.yml

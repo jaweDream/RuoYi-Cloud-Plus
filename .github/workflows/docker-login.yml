@@ -25,6 +25,10 @@ on:
         description: "镜像前缀"
         value: ${{ jobs.login.outputs.image_prefix }}
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   login:
     runs-on: ubuntu-latest
