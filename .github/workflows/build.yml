@@ -134,6 +134,17 @@ jobs:
             type=sha,format=short,prefix=
             type=ref,event=branch
 
+      - name: 准备 JAR 文件
+        run: |
+          # 确保目标模块的 target 目录存在
+          mkdir -p ./${{ inputs.module }}/target/
+
+          # 复制 JAR 文件到 Dockerfile 期望的位置
+          cp ${{ steps.build-params.outputs.jar_file }} ./${{ inputs.module }}/target/${{ inputs.module }}.jar
+
+          echo "JAR 文件已复制到 ./${{ inputs.module }}/target/${{ inputs.module }}.jar"
+          ls -la ./${{ inputs.module }}/target/
+
       - name: 构建并推送 Docker 镜像
         uses: docker/build-push-action@v6
         with:
