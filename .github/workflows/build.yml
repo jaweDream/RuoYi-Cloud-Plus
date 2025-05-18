@@ -134,7 +134,7 @@ jobs:
             type=sha,format=short,prefix=
             type=ref,event=branch
 
-            - name: 准备 JAR 文件
+      - name: 准备 JAR 文件
         run: |
           # 确定模块目录路径
           if [[ "${{ inputs.module }}" == ruoyi-* && ! "${{ inputs.module }}" =~ ^ruoyi-modules/ && ! "${{ inputs.module }}" =~ ^ruoyi-visual/ ]]; then
