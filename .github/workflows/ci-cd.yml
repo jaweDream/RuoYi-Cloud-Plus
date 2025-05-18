@@ -50,13 +50,15 @@ jobs:
           restore-keys: ${{ runner.os }}-m2
 
       - name: 打包制品
-        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+#        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+        if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         run: |
           mkdir -p artifacts
           find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
 
       - name: 上传构建制品
-        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+#        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+        if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         uses: actions/upload-artifact@v4
         with:
           name: application-artifacts
@@ -65,7 +67,8 @@ jobs:
 
   docker:
     needs: build
-    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+#    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
     runs-on: ubuntu-latest
 
     steps:
