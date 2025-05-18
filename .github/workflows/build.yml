@@ -40,7 +40,7 @@ on:
         required: false
       custom_token:
         required: false
-      github_token:
+      gh_token:
         required: false
 
 permissions:
@@ -56,7 +56,7 @@ jobs:
     secrets:
       custom_username: ${{ secrets.custom_username }}
       custom_token: ${{ secrets.custom_token }}
-      github_token: ${{ secrets.github_token }}
+      gh_token: ${{ secrets.gh_token }}
 
   build-image:
     needs: login
