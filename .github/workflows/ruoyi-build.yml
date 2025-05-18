@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: 微服务模块构建
 
 on:
   push:
