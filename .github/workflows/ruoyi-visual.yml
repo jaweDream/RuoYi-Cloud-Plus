@@ -3,7 +3,7 @@ name: RuoYi Visual 模块构建
 on:
   push:
     branches: [ "dev-ops" ]
-    tags: [ "v*.*.*" ]
+    tags: [ "auto" ]
   #    paths:
 #      - 'ruoyi-visual/**'
 #      - 'pom.xml'

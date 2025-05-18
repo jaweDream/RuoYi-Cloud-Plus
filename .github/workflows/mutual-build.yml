@@ -1,0 +1,27 @@
+name: 手动构建指定模块
+
+on:
+  # 移除自动触发条件，将此工作流专用于手动构建
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: '要构建的模块（以逗号分隔，留空则构建所有模块）'
+        required: false
+        type: string
+      image_tag:
+        description: '镜像标签（留空则使用当前分支名或latest）'
+        required: false
+        type: string
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: choice
+        options:
+          - github
+          - dockerhub
+          - custom
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string

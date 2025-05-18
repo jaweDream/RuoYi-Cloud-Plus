@@ -3,7 +3,7 @@ name: RuoYi 主要模块构建
 on:
   push:
     branches: [ "dev-ops" ]
-    tags: [ "v*.*.*" ]
+    tags: [ "auto" ]
   pull_request:
     branches: [ "dev-ops" ]
   workflow_dispatch:
