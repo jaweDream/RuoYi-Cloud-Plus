@@ -106,7 +106,7 @@ jobs:
       custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
     strategy:
       matrix:
-        module: ${{ fromJSON(format('[{0}]', needs.prepare-modules.outputs.modules)) }}
+        module: ${{ split(needs.prepare-modules.outputs.modules, ',') }}
       fail-fast: false
 
   deploy:
