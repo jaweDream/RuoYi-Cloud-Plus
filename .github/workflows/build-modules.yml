@@ -1,6 +1,11 @@
 name: Build Microservice Modules
 
 on:
+  push:
+    branches: [ "dev-ops" ]
+    paths:
+      - 'ruoyi-**/**'  # 仅当微服务模块代码变更时触发
+      - 'pom.xml'      # 或当 pom.xml 变更时触发
   workflow_dispatch:
     inputs:
       modules:
