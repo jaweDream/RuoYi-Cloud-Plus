@@ -1,0 +1,55 @@
+name: Docker Registry Login
+
+on:
+  workflow_call:
+    inputs:
+      registry_type:
+        description: '镜像仓库类型 (github/dockerhub/custom)'
+        required: false
+        default: 'github'
+        type: string
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
+    secrets:
+      custom_username:
+        required: false
+      custom_token:
+        required: false
+    outputs:
+      registry_url:
+        description: "镜像仓库URL"
+        value: ${{ jobs.login.outputs.registry_url }}
+      image_prefix:
+        description: "镜像前缀"
+        value: ${{ jobs.login.outputs.image_prefix }}
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    outputs:
+      registry_url: ${{ steps.set-outputs.outputs.registry_url }}
+      image_prefix: ${{ steps.set-outputs.outputs.image_prefix }}
+
+    steps:
+      - name: 设置镜像仓库变量
+        id: set-outputs
+        run: |
+          if [ "${{ inputs.registry_type }}" == "github" ]; then
+            echo "registry_url=ghcr.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=ghcr.io/${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.registry_type }}" == "dockerhub" ]; then
+            echo "registry_url=docker.io" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_OUTPUT
+          else
+            echo "registry_url=${{ inputs.custom_registry }}" >> $GITHUB_OUTPUT
+            echo "image_prefix=${{ inputs.custom_registry }}/${{ secrets.custom_username }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 登录到镜像仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.set-outputs.outputs.registry_url }}
+          username: ${{ inputs.registry_type == 'github' && github.repository_owner || (inputs.registry_type == 'dockerhub' && secrets.DOCKERHUB_USERNAME || secrets.custom_username) }}
+          password: ${{ inputs.registry_type == 'github' && secrets.GITHUB_TOKEN || (inputs.registry_type == 'dockerhub' && secrets.DOCKERHUB_TOKEN || secrets.custom_token) }}
