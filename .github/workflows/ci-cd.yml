@@ -76,22 +76,41 @@ jobs:
           path: artifacts/
           retention-days: 5
 
-  docker:
-    needs: build
+  prepare-modules:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
+    outputs:
+      modules: ${{ steps.set-modules.outputs.modules }}
+
+    steps:
+      - name: 设置要构建的模块
+        id: set-modules
+        run: |
+          # 默认模块列表
+          MODULES='ruoyi-gateway,ruoyi-auth,ruoyi-system,ruoyi-gen,ruoyi-job,ruoyi-resource,ruoyi-workflow'
+          echo "modules=${MODULES}" >> $GITHUB_OUTPUT
+          echo "将构建以下模块: ${MODULES}"
+
+  docker-build:
+    needs: [build, prepare-modules]
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
     uses: ./.github/workflows/build.yml
     with:
-      module: 'ruoyi-gateway'
-      image_name: 'tg-bot-cloud'
+      module: ${{ matrix.module }}
+      image_name: ${{ format('tg-bot-cloud-{0}', matrix.module) }}
       image_tag: ${{ github.ref_name }}
       registry_type: ${{ github.event.inputs.registry_type || 'github' }}
       custom_registry: ${{ github.event.inputs.custom_registry }}
     secrets:
       custom_username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
       custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
+    strategy:
+      matrix:
+        module: ${{ fromJSON(format('[{0}]', needs.prepare-modules.outputs.modules)) }}
+      fail-fast: false
 
   deploy:
-    needs: docker
+    needs: docker-build
     if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v')) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:

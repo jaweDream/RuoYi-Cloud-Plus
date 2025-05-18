@@ -134,16 +134,42 @@ jobs:
             type=sha,format=short,prefix=
             type=ref,event=branch
 
-      - name: 准备 JAR 文件
+            - name: 准备 JAR 文件
         run: |
-          # 确保目标模块的 target 目录存在
-          mkdir -p ./${{ inputs.module }}/target/
+          # 确定模块目录路径
+          if [[ "${{ inputs.module }}" == ruoyi-* && ! "${{ inputs.module }}" =~ ^ruoyi-modules/ && ! "${{ inputs.module }}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="./${{ inputs.module }}"
+          elif [[ "${{ inputs.module }}" =~ ^ruoyi-modules/ ]]; then
+            MODULE_DIR="./${{ inputs.module }}"
+          elif [[ "${{ inputs.module }}" =~ ^ruoyi-visual/ ]]; then
+            MODULE_DIR="./${{ inputs.module }}"
+          elif [[ -d "./ruoyi-modules/${{ inputs.module }}" ]]; then
+            MODULE_DIR="./ruoyi-modules/${{ inputs.module }}"
+          elif [[ -d "./ruoyi-visual/${{ inputs.module }}" ]]; then
+            MODULE_DIR="./ruoyi-visual/${{ inputs.module }}"
+          else
+            MODULE_DIR="./${{ inputs.module }}"
+          fi
 
-          # 复制 JAR 文件到 Dockerfile 期望的位置
-          cp ${{ steps.build-params.outputs.jar_file }} ./${{ inputs.module }}/target/${{ inputs.module }}.jar
+          echo "模块目录: ${MODULE_DIR}"
 
-          echo "JAR 文件已复制到 ./${{ inputs.module }}/target/${{ inputs.module }}.jar"
-          ls -la ./${{ inputs.module }}/target/
+          # 确保目标目录存在
+          mkdir -p ${MODULE_DIR}/target/
+          mkdir -p ./target/  # 同时创建根目录下的target目录
+
+          # 将JAR文件复制到三个可能的位置，确保Docker能找到
+          cp ${{ steps.build-params.outputs.jar_file }} ${MODULE_DIR}/target/${{ inputs.module }}.jar
+          cp ${{ steps.build-params.outputs.jar_file }} ./target/${{ inputs.module }}.jar
+
+          echo "检查JAR文件位置:"
+          echo "${MODULE_DIR}/target/${{ inputs.module }}.jar:"
+          ls -la ${MODULE_DIR}/target/
+          echo "./target/${{ inputs.module }}.jar:"
+          ls -la ./target/
+
+          # 显示文件目录结构，帮助调试
+          echo "显示工作目录结构:"
+          find . -name "${{ inputs.module }}.jar" | sort
 
       - name: 构建并推送 Docker 镜像
         uses: docker/build-push-action@v6
@@ -152,7 +178,7 @@ jobs:
           file: ${{ steps.build-params.outputs.dockerfile }}
           build-args: |
             MODULE=${{ inputs.module }}
-            JAR_FILE=${{ steps.build-params.outputs.jar_file }}
+            JAR_FILE=./target/${{ inputs.module }}.jar
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
