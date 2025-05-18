@@ -1,0 +1,33 @@
+# 这个文件定义了代码的所有者，用于自动分配 Pull Request 的审阅者
+# 更多信息：https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# 默认所有者
+*                   @项目管理员用户名
+
+# 通用工作流文件
+/.github/workflows/  @DevOps团队用户名
+
+# 根目录配置文件
+/*.xml               @项目管理员用户名
+/pom.xml             @项目管理员用户名
+
+# ruoyi 模块
+/ruoyi-api/          @API模块负责人用户名
+/ruoyi-auth/         @认证模块负责人用户名
+/ruoyi-common/       @通用模块负责人用户名
+/ruoyi-example/      @示例模块负责人用户名
+/ruoyi-gateway/      @网关模块负责人用户名
+
+# ruoyi-modules 子模块
+/ruoyi-modules/ruoyi-system/     @系统模块负责人用户名
+/ruoyi-modules/ruoyi-gen/        @代码生成模块负责人用户名
+/ruoyi-modules/ruoyi-job/        @定时任务模块负责人用户名
+
+# 脚本
+/script/             @DevOps团队用户名
+
+# Docker相关文件
+/script/docker/      @DevOps团队用户名
+
+# 数据库脚本
+/script/sql/         @DBA团队用户名

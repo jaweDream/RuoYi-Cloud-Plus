@@ -1,0 +1,155 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "dev-ops" ]
+    tags: [ "v*.*.*" ]
+  pull_request:
+    branches: [ "dev-ops" ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: [ '21' ]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 构建与测试
+        run: mvn -B package --file pom.xml -DskipTests=${{ github.event_name == 'push' && contains(github.ref, 'tags/v') && 'false' || 'true' }}
+
+      - name: 缓存Maven包
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: 打包制品
+        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+        run: |
+          mkdir -p artifacts
+          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
+
+      - name: 上传构建制品
+        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-artifacts
+          path: artifacts/
+          retention-days: 5
+
+  docker:
+    needs: build
+    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载构建制品
+        uses: actions/download-artifact@v4
+        with:
+          name: application-artifacts
+          path: artifacts/
+
+      - name: 登录到 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 提取元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/tg-bot-cloud
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./script/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: docker
+    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v')) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment || (contains(github.ref, 'tags/v') && 'prod' || 'dev') }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 部署到开发环境
+        if: github.event.inputs.environment == 'dev' || (!github.event.inputs.environment && !contains(github.ref, 'tags/v'))
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_HOST }}
+          username: ${{ secrets.DEV_USERNAME }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          port: ${{ secrets.DEV_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+            docker-compose pull
+            docker-compose up -d
+
+      - name: 部署到测试环境
+        if: github.event.inputs.environment == 'test'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TEST_HOST }}
+          username: ${{ secrets.TEST_USERNAME }}
+          key: ${{ secrets.TEST_SSH_KEY }}
+          port: ${{ secrets.TEST_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+            docker-compose pull
+            docker-compose up -d
+
+      - name: 部署到生产环境
+        if: github.event.inputs.environment == 'prod' || contains(github.ref, 'tags/v')
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+            docker-compose pull
+            docker-compose up -d
