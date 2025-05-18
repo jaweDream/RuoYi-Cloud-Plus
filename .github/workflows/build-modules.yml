@@ -11,6 +11,19 @@ on:
         description: '镜像标签（留空则使用当前分支名或latest）'
         required: false
         type: string
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: choice
+        options:
+          - github
+          - dockerhub
+          - custom
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
 
 jobs:
   prepare:
@@ -50,10 +63,10 @@ jobs:
           cache: maven
 
       - name: Maven 构建
-        run: |
-          mvn -B clean package -DskipTests
-          echo "检查构建结果和目标目录内容..."
-          find . -name "target" -type d -exec ls -la {} \;
+        run: mvn -B clean package -DskipTests
+
+      - name: 检查构建结果和目标目录内容...
+        run: find . -name "target" -type d -exec ls -la {} \;
 
       - name: 打包制品
         run: |
@@ -95,63 +108,16 @@ jobs:
 
   docker-build:
     needs: [prepare, build]
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build.yml
+    with:
+      module: ${{ matrix.module }}
+      image_tag: ${{ inputs.image_tag || github.ref_name }}
+      registry_type: ${{ inputs.registry_type || 'github' }}
+      custom_registry: ${{ inputs.custom_registry }}
+    secrets:
+      custom_username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
+      custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
     strategy:
       matrix:
         module: ${{ fromJSON(format('[{0}]', needs.prepare.outputs.modules)) }}
       fail-fast: false
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 下载构建制品
-        uses: actions/download-artifact@v4
-        with:
-          name: application-artifacts
-          path: artifacts/
-
-      - name: 设置模块变量
-        id: set-vars
-        run: |
-          MODULE_NAME="${{ matrix.module }}"
-          echo "module_name=${MODULE_NAME}" >> $GITHUB_OUTPUT
-          echo "正在构建模块: ${MODULE_NAME}"
-
-      - name: 登录到 GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 设置 Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 提取镜像标签
-        id: tags
-        run: |
-          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            TAG="${{ github.event.inputs.image_tag }}"
-          elif [ "${{ github.ref_name }}" = "main" ] || [ "${{ github.ref_name }}" = "master" ]; then
-            TAG="latest"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "使用镜像标签: ${TAG}"
-
-      - name: 构建并推送 Docker 镜像
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./script/docker/Dockerfile
-          build-args: |
-            MODULE=${{ steps.set-vars.outputs.module_name }}
-            JAR_FILE=artifacts/${{ steps.set-vars.outputs.module_name }}.jar
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ steps.set-vars.outputs.module_name }}:${{ steps.tags.outputs.image_tag }}
-            ghcr.io/${{ github.repository_owner }}/${{ steps.set-vars.outputs.module_name }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

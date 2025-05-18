@@ -11,7 +11,7 @@ on:
         description: 'Dockerfile 路径'
         required: false
         type: string
-        default: './script/docker/Dockerfile'
+        default: ''
       image_name:
         description: '镜像名称'
         required: false
@@ -21,43 +21,113 @@ on:
         required: false
         type: string
         default: 'latest'
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: string
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
+      jar_file:
+        description: 'JAR 文件路径'
+        required: false
+        type: string
+        default: ''
     secrets:
-      registry_username:
-        required: true
-      registry_password:
-        required: true
-      registry_url:
+      custom_username:
+        required: false
+      custom_token:
         required: false
 
 jobs:
+  login:
+    uses: ./.github/workflows/docker-login.yml
+    with:
+      registry_type: ${{ inputs.registry_type }}
+      custom_registry: ${{ inputs.custom_registry }}
+    secrets:
+      custom_username: ${{ secrets.custom_username }}
+      custom_token: ${{ secrets.custom_token }}
+
   build-image:
+    needs: login
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 登录到镜像仓库
-        uses: docker/login-action@v3
+      - name: 下载构建制品
+        uses: actions/download-artifact@v4
         with:
-          registry: ${{ secrets.registry_url || 'docker.io' }}
-          username: ${{ secrets.registry_username }}
-          password: ${{ secrets.registry_password }}
+          name: application-artifacts
+          path: artifacts/
 
       - name: 设置构建参数
-        id: build_params
+        id: build-params
         run: |
-          FULL_IMAGE_NAME="${{ secrets.registry_url != '' && format('{0}/', secrets.registry_url) || '' }}${{ secrets.registry_username }}/${{ inputs.image_name || format('tg-bot-cloud-{0}', inputs.module) }}"
-          echo "FULL_IMAGE_NAME=${FULL_IMAGE_NAME}" >> $GITHUB_ENV
-          echo "full_image_name=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
+          # 确定 Dockerfile 路径
+          if [ -n "${{ inputs.dockerfile }}" ]; then
+            # 使用指定的 Dockerfile 路径
+            DOCKERFILE="${{ inputs.dockerfile }}"
+          else
+            # 检查模块根目录下是否有 Dockerfile
+            if [ -f "./${{ inputs.module }}/Dockerfile" ]; then
+              DOCKERFILE="./${{ inputs.module }}/Dockerfile"
+            # 检查 ruoyi-modules 子目录
+            elif [ -f "./ruoyi-modules/${{ inputs.module }}/Dockerfile" ]; then
+              DOCKERFILE="./ruoyi-modules/${{ inputs.module }}/Dockerfile"
+            # 检查 ruoyi-visual 子目录
+            elif [ -f "./ruoyi-visual/${{ inputs.module }}/Dockerfile" ]; then
+              DOCKERFILE="./ruoyi-visual/${{ inputs.module }}/Dockerfile"
+            else
+              echo "错误: 无法找到模块 ${{ inputs.module }} 的 Dockerfile"
+              echo "请检查以下路径:"
+              echo "./${{ inputs.module }}/Dockerfile"
+              echo "./ruoyi-modules/${{ inputs.module }}/Dockerfile"
+              echo "./ruoyi-visual/${{ inputs.module }}/Dockerfile"
+              echo "或者使用 dockerfile 参数指定路径"
+              exit 1
+            fi
+          fi
+          echo "dockerfile=${DOCKERFILE}" >> $GITHUB_OUTPUT
+          echo "使用 Dockerfile: ${DOCKERFILE}"
+
+          # 确定 JAR 文件路径
+          if [ -n "${{ inputs.jar_file }}" ]; then
+            JAR_FILE="${{ inputs.jar_file }}"
+          else
+            JAR_FILE="artifacts/${{ inputs.module }}.jar"
+
+            # 检查 JAR 文件是否存在
+            if [ ! -f "${JAR_FILE}" ]; then
+              echo "警告: 未找到 ${JAR_FILE}"
+              echo "列出 artifacts 目录内容:"
+              ls -la artifacts/
+
+              # 尝试查找匹配的 JAR 文件
+              FOUND_JAR=$(find artifacts/ -name "*${{ inputs.module }}*.jar" | head -n 1)
+              if [ -n "${FOUND_JAR}" ]; then
+                JAR_FILE="${FOUND_JAR}"
+                echo "找到匹配的 JAR 文件: ${JAR_FILE}"
+              else
+                echo "错误: 无法找到模块 ${{ inputs.module }} 的 JAR 文件"
+                exit 1
+              fi
+            fi
+          fi
+          echo "jar_file=${JAR_FILE}" >> $GITHUB_OUTPUT
+          echo "使用 JAR 文件: ${JAR_FILE}"
+
+      - name: 设置Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: 提取元数据
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.FULL_IMAGE_NAME }}
+          images: ${{ needs.login.outputs.image_prefix }}/${{ inputs.image_name || format('tg-bot-cloud-{0}', inputs.module) }}
           tags: |
             type=raw,value=${{ inputs.image_tag }}
             type=raw,value=latest,enable=${{ inputs.image_tag == '' || inputs.image_tag == 'latest' }}
@@ -68,9 +138,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ inputs.dockerfile }}
+          file: ${{ steps.build-params.outputs.dockerfile }}
           build-args: |
             MODULE=${{ inputs.module }}
+            JAR_FILE=${{ steps.build-params.outputs.jar_file }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

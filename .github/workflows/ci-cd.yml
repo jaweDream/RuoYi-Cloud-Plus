@@ -17,6 +17,19 @@ on:
           - dev
           - test
           - prod
+      registry_type:
+        description: '镜像仓库类型'
+        required: false
+        default: 'github'
+        type: choice
+        options:
+          - github
+          - dockerhub
+          - custom
+      custom_registry:
+        description: '自定义镜像仓库URL'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -50,14 +63,12 @@ jobs:
           restore-keys: ${{ runner.os }}-m2
 
       - name: 打包制品
-#        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
         if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         run: |
           mkdir -p artifacts
           find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
 
       - name: 上传构建制品
-#        if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
         if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         uses: actions/upload-artifact@v4
         with:
@@ -67,46 +78,18 @@ jobs:
 
   docker:
     needs: build
-#    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v'))
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 下载构建制品
-        uses: actions/download-artifact@v4
-        with:
-          name: application-artifacts
-          path: artifacts/
-
-      - name: 登录到 GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 提取元数据
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/tg-bot-cloud
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
-            type=sha
-
-      - name: 构建并推送 Docker 镜像
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./script/docker/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+    uses: ./.github/workflows/build.yml
+    with:
+      module: 'tg-bot-cloud'
+      image_name: 'tg-bot-cloud'
+      image_tag: ${{ github.ref_name }}
+      registry_type: ${{ github.event.inputs.registry_type || 'github' }}
+      custom_registry: ${{ github.event.inputs.custom_registry }}
+      dockerfile: './ruoyi-gateway/Dockerfile' # 使用一个存在的 Dockerfile 作为示例
+    secrets:
+      custom_username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
+      custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
 
   deploy:
     needs: docker
