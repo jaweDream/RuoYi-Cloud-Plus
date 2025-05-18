@@ -87,7 +87,7 @@ jobs:
         id: set-modules
         run: |
           # 默认模块列表
-          MODULES='ruoyi-gateway,ruoyi-auth,ruoyi-system,ruoyi-gen,ruoyi-job,ruoyi-resource,ruoyi-workflow'
+          MODULES='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
           echo "modules=${MODULES}" >> $GITHUB_OUTPUT
           echo "将构建以下模块: ${MODULES}"
 
@@ -106,7 +106,7 @@ jobs:
       custom_token: ${{ secrets.CUSTOM_REGISTRY_TOKEN }}
     strategy:
       matrix:
-        module: ${{ split(needs.prepare-modules.outputs.modules, ',') }}
+        module: ${{ fromJSON(needs.prepare-modules.outputs.modules) }}
       fail-fast: false
 
   deploy:
