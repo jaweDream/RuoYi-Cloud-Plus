@@ -182,23 +182,8 @@ jobs:
           fi
           echo "module_dir=${MODULE_DIR}" >> $GITHUB_OUTPUT
 
-          # 准备JAR文件
-          mkdir -p ${MODULE_DIR}/target/
-          mkdir -p ./target/
-
-          # 寻找JAR文件
-          JAR_FILE=$(find artifacts/ -name "*${MODULE}*.jar" | head -n 1)
-          if [ -z "${JAR_FILE}" ]; then
-            echo "错误: 无法找到模块 ${MODULE} 的 JAR 文件"
-            exit 1
-          fi
-
-          # 复制JAR文件到Dockerfile期望的位置
-          cp ${JAR_FILE} ${MODULE_DIR}/target/${MODULE}.jar
-          cp ${JAR_FILE} ./target/${MODULE}.jar
-
-          echo "找到 JAR 文件: ${JAR_FILE}"
-          echo "已复制到 ${MODULE_DIR}/target/${MODULE}.jar 和 ./target/${MODULE}.jar"
+          # 使用准备脚本，包含JAR文件复制和zhFonts处理
+          bash .github/workflows/docker-prepare.sh "${MODULE}" "${MODULE_DIR}"
 
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
