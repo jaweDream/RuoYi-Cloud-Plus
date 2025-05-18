@@ -1,22 +1,24 @@
-name: RuoYi Visual 模块构建
+name: RuoYi 可视化中心服务模块构建
 
 on:
   push:
     branches: [ "dev-ops" ]
-    tags: [ "auto" ]
-  #    paths:
-#      - 'ruoyi-visual/**'
-#      - 'pom.xml'
+    paths:
+      - 'ruoyi-visual/**'
+      - 'common/**'
+      - 'pom.xml'
+  pull_request:
+    branches: [ "dev-ops" ]
   workflow_dispatch:
     inputs:
-      modules:
-        description: '要构建的视觉模块（以逗号分隔，留空则构建所有视觉模块）'
-        required: false
-        type: string
-      image_tag:
-        description: '镜像标签（留空则使用当前分支名或latest）'
-        required: false
-        type: string
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - test
       registry_type:
         description: '镜像仓库类型'
         required: false
@@ -37,82 +39,103 @@ permissions:
   packages: write  # 允许推送到GHCR
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      modules_json: ${{ steps.set-modules.outputs.modules_json }}
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置要构建的视觉模块
-        id: set-modules
-        run: |
-          if [ -z "${{ github.event.inputs.modules }}" ]; then
-            # 默认视觉模块列表 - 添加所有ruoyi-visual下的模块
-            # 根据实际项目结构设置
-            MODULES_ARRAY='["ruoyi-visual/ruoyi-monitor", "ruoyi-visual/ruoyi-nacos", "ruoyi-visual/ruoyi-seata-server", "ruoyi-visual/ruoyi-sentinel-dashboard", "ruoyi-visual/ruoyi-snailjob-server"]'
-          else
-            # 转换用户输入的逗号分隔列表为JSON数组
-            IFS=',' read -ra MODULE_LIST <<< "${{ github.event.inputs.modules }}"
-            MODULES_ARRAY='['
-            for module in "${MODULE_LIST[@]}"; do
-              if [ "$MODULES_ARRAY" != "[" ]; then
-                MODULES_ARRAY="$MODULES_ARRAY,"
-              fi
-              # 如果输入的模块名不包含ruoyi-visual前缀，自动添加
-              if [[ "$module" != ruoyi-visual/* ]]; then
-                module="ruoyi-visual/$module"
-              fi
-              MODULES_ARRAY="$MODULES_ARRAY\"$module\""
-            done
-            MODULES_ARRAY="$MODULES_ARRAY]"
-          fi
-          echo "modules_json=${MODULES_ARRAY}" >> $GITHUB_OUTPUT
-          echo "将构建以下视觉模块: ${MODULES_ARRAY}"
-
   build:
-    needs: prepare
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: [ '21' ]
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 JDK 21
+      - name: 设置 JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: maven
 
-      - name: Maven 构建
-        run: mvn -B clean package -DskipTests
+      - name: 构建与测试
+        run: mvn -B package --file pom.xml -DskipTests=true
+
+      - name: 缓存Maven包
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
 
       - name: 打包制品
+        if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         run: |
           mkdir -p artifacts
-          echo "查找编译后的 JAR 文件..."
-          # 特别针对ruoyi-visual模块查找JAR文件
-          find ./ruoyi-visual -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
-
-          echo "检查 artifacts 目录内容:"
-          ls -la artifacts/
+          find . -name "*.jar" -not -path "*/target/original-*.jar" -not -path "*/target/*-javadoc.jar" -not -path "*/target/*-sources.jar" -not -path "*/target/test-*" -not -path "*/target/classes" -not -path "*/target/maven-*" -exec cp {} artifacts/ \;
 
       - name: 上传构建制品
+        if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         uses: actions/upload-artifact@v4
         with:
           name: visual-artifacts
           path: artifacts/
           retention-days: 5
 
+  prepare-modules:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
+    outputs:
+      modules: ${{ steps.set-modules.outputs.modules }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置要构建的模块
+        id: set-modules
+        run: |
+          # 检测ruoyi-visual目录下的所有可能的模块
+          MODULES=()
+
+          # 查找所有ruoyi-visual目录下的模块
+          if [ -d "ruoyi-visual" ]; then
+            for dir in ruoyi-visual/*/; do
+              if [ -d "$dir" ]; then
+                module_name=$(basename "$dir")
+                # 检查是否存在pom.xml文件
+                if [ -f "${dir}pom.xml" ]; then
+                  MODULES+=("ruoyi-visual/${module_name}")
+                fi
+              fi
+            done
+          fi
+
+          # 如果没有找到任何模块，设置一个默认值
+          if [ ${#MODULES[@]} -eq 0 ]; then
+            echo "没有找到任何visual模块，请检查目录结构"
+            MODULES='["ruoyi-visual/ruoyi-monitor"]'
+          else
+            # 将数组转换为JSON格式
+            MODULES_JSON="["
+            for ((i=0; i<${#MODULES[@]}; i++)); do
+              MODULES_JSON+="\"${MODULES[$i]}\""
+              if [ $i -lt $((${#MODULES[@]}-1)) ]; then
+                MODULES_JSON+=","
+              fi
+            done
+            MODULES_JSON+="]"
+            MODULES="$MODULES_JSON"
+          fi
+
+          echo "modules=${MODULES}" >> $GITHUB_OUTPUT
+          echo "将构建以下模块: ${MODULES}"
+
   docker-build:
-    needs: [prepare, build]
+    needs: [build, prepare-modules]
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        module: ${{ fromJSON(needs.prepare.outputs.modules_json) }}
+        module: ${{ fromJSON(needs.prepare-modules.outputs.modules) }}
       fail-fast: false
 
     steps:
@@ -125,7 +148,6 @@ jobs:
           name: visual-artifacts
           path: artifacts/
 
-      # 直接在这个文件中处理Docker登录
       - name: 设置 Docker 登录信息
         id: login-vars
         run: |
@@ -160,13 +182,12 @@ jobs:
         run: |
           MODULE="${{ matrix.module }}"
 
-          # 从完整路径中提取模块名
-          MODULE_NAME=$(basename "${MODULE}")
-          echo "module_name=${MODULE_NAME}" >> $GITHUB_OUTPUT
+          # 提取模块基本名称（去掉路径前缀）
+          BASE_MODULE=$(basename "${MODULE}")
 
           # 确定 Dockerfile 路径
-          if [[ -f "./${MODULE}/Dockerfile" ]]; then
-            DOCKERFILE="./${MODULE}/Dockerfile"
+          if [[ -f "${MODULE}/Dockerfile" ]]; then
+            DOCKERFILE="${MODULE}/Dockerfile"
           else
             echo "错误: 无法找到模块 ${MODULE} 的 Dockerfile"
             exit 1
@@ -174,25 +195,61 @@ jobs:
           echo "dockerfile=${DOCKERFILE}" >> $GITHUB_OUTPUT
 
           # 确定模块目录
-          MODULE_DIR="./${MODULE}"
+          MODULE_DIR="${MODULE}"
           echo "module_dir=${MODULE_DIR}" >> $GITHUB_OUTPUT
 
-          # 使用准备脚本，包含JAR文件复制和zhFonts处理
-          bash .github/workflows/docker-prepare.sh "${MODULE_NAME}" "${MODULE_DIR}"
+          # 使用准备脚本
+          bash .github/workflows/docker-prepare.sh "${BASE_MODULE}" "${MODULE_DIR}"
 
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 构建并推送镜像
       - name: 构建并推送 Docker 镜像
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ steps.build-params.outputs.dockerfile }}
           build-args: |
-            MODULE=${{ matrix.module }}
-            JAR_FILE=./target/${{ steps.build-params.outputs.module_name }}.jar
+            MODULE=$(basename "${{ matrix.module }}")
+            JAR_FILE=./target/$(basename "${{ matrix.module }}").jar
           push: true
           tags: |
-            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.module_name }}:${{ github.event.inputs.image_tag || github.ref_name }}
-            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.module_name }}:latest
+            ${{ steps.login-vars.outputs.image_prefix }}/$(basename "${{ matrix.module }}"):${{ github.ref_name }}
+            ${{ steps.login-vars.outputs.image_prefix }}/$(basename "${{ matrix.module }}"):latest
+
+  deploy:
+    needs: docker-build
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 部署到开发环境
+        if: github.event.inputs.environment == 'dev' || !github.event.inputs.environment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_HOST }}
+          username: ${{ secrets.DEV_USERNAME }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          port: ${{ secrets.DEV_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+            docker-compose pull
+            docker-compose up -d
+
+      - name: 部署到测试环境
+        if: github.event.inputs.environment == 'test'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.TEST_HOST }}
+          username: ${{ secrets.TEST_USERNAME }}
+          key: ${{ secrets.TEST_SSH_KEY }}
+          port: ${{ secrets.TEST_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+            docker-compose pull
+            docker-compose up -d

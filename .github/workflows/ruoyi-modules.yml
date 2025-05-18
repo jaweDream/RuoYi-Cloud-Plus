@@ -1,9 +1,14 @@
-name: RuoYi 主要模块构建
+name: RuoYi 业务模块构建
 
 on:
   push:
     branches: [ "dev-ops" ]
-    tags: [ "auto" ]
+    paths:
+      - 'ruoyi-modules/**'
+      - 'ruoyi-gateway/**'
+      - 'ruoyi-auth/**'
+      - 'common/**'
+      - 'pom.xml'
   pull_request:
     branches: [ "dev-ops" ]
   workflow_dispatch:
@@ -16,7 +21,6 @@ on:
         options:
           - dev
           - test
-          - prod
       registry_type:
         description: '镜像仓库类型'
         required: false
@@ -54,7 +58,7 @@ jobs:
           cache: maven
 
       - name: 构建与测试
-        run: mvn -B package --file pom.xml -DskipTests=${{ github.event_name == 'push' && contains(github.ref, 'tags/v') && 'false' || 'true' }}
+        run: mvn -B package --file pom.xml -DskipTests=true
 
       - name: 缓存Maven包
         uses: actions/cache@v4
@@ -73,7 +77,7 @@ jobs:
         if: github.event_name == 'push' && contains(github.ref, 'dev-ops')
         uses: actions/upload-artifact@v4
         with:
-          name: application-artifacts
+          name: modules-artifacts
           path: artifacts/
           retention-days: 5
 
@@ -87,7 +91,7 @@ jobs:
       - name: 设置要构建的模块
         id: set-modules
         run: |
-          # 默认模块列表
+          # 业务模块列表 (包含gateway和auth)
           MODULES='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
           echo "modules=${MODULES}" >> $GITHUB_OUTPUT
           echo "将构建以下模块: ${MODULES}"
@@ -108,10 +112,9 @@ jobs:
       - name: 下载构建制品
         uses: actions/download-artifact@v4
         with:
-          name: application-artifacts
+          name: modules-artifacts
           path: artifacts/
 
-      # 直接在这个文件中处理Docker登录，无需嵌套工作流
       - name: 设置 Docker 登录信息
         id: login-vars
         run: |
@@ -151,8 +154,6 @@ jobs:
             DOCKERFILE="./${MODULE}/Dockerfile"
           elif [[ -f "./ruoyi-modules/${MODULE}/Dockerfile" ]]; then
             DOCKERFILE="./ruoyi-modules/${MODULE}/Dockerfile"
-          elif [[ -f "./ruoyi-visual/${MODULE}/Dockerfile" ]]; then
-            DOCKERFILE="./ruoyi-visual/${MODULE}/Dockerfile"
           else
             echo "错误: 无法找到模块 ${MODULE} 的 Dockerfile"
             exit 1
@@ -160,22 +161,18 @@ jobs:
           echo "dockerfile=${DOCKERFILE}" >> $GITHUB_OUTPUT
 
           # 确定模块目录
-          if [[ "${MODULE}" == ruoyi-* && ! "${MODULE}" =~ ^ruoyi-modules/ && ! "${MODULE}" =~ ^ruoyi-visual/ ]]; then
+          if [[ "${MODULE}" == ruoyi-* && ! "${MODULE}" =~ ^ruoyi-modules/ ]]; then
             MODULE_DIR="./${MODULE}"
           elif [[ "${MODULE}" =~ ^ruoyi-modules/ ]]; then
             MODULE_DIR="./${MODULE}"
-          elif [[ "${MODULE}" =~ ^ruoyi-visual/ ]]; then
-            MODULE_DIR="./${MODULE}"
           elif [[ -d "./ruoyi-modules/${MODULE}" ]]; then
             MODULE_DIR="./ruoyi-modules/${MODULE}"
-          elif [[ -d "./ruoyi-visual/${MODULE}" ]]; then
-            MODULE_DIR="./ruoyi-visual/${MODULE}"
           else
             MODULE_DIR="./${MODULE}"
           fi
           echo "module_dir=${MODULE_DIR}" >> $GITHUB_OUTPUT
 
-          # 使用准备脚本，包含JAR文件复制和zhFonts处理
+          # 使用准备脚本
           bash .github/workflows/docker-prepare.sh "${MODULE}" "${MODULE_DIR}"
 
       - name: 设置 Docker Buildx
@@ -196,17 +193,17 @@ jobs:
 
   deploy:
     needs: docker-build
-    if: github.event_name == 'push' && (contains(github.ref, 'main') || contains(github.ref, 'master') || contains(github.ref, 'tags/v')) || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:
-      name: ${{ github.event.inputs.environment || (contains(github.ref, 'tags/v') && 'prod' || 'dev') }}
+      name: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
       - name: 部署到开发环境
-        if: github.event.inputs.environment == 'dev' || (!github.event.inputs.environment && !contains(github.ref, 'tags/v'))
+        if: github.event.inputs.environment == 'dev' || !github.event.inputs.environment
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEV_HOST }}
@@ -226,19 +223,6 @@ jobs:
           username: ${{ secrets.TEST_USERNAME }}
           key: ${{ secrets.TEST_SSH_KEY }}
           port: ${{ secrets.TEST_PORT }}
-          script: |
-            cd /opt/tg-bot-cloud
-            docker-compose pull
-            docker-compose up -d
-
-      - name: 部署到生产环境
-        if: github.event.inputs.environment == 'prod' || contains(github.ref, 'tags/v')
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USERNAME }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT }}
           script: |
             cd /opt/tg-bot-cloud
             docker-compose pull

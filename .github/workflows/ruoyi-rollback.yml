@@ -1,0 +1,69 @@
+name: RuoYi 生产环境版本回滚
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '回滚到的版本号 (例如: v1.2.3)'
+        required: true
+        type: string
+      environment:
+        description: '目标环境'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - test
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 回滚到指定版本
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ github.event.inputs.environment == 'production' && secrets.PROD_HOST || secrets.TEST_HOST }}
+          username: ${{ github.event.inputs.environment == 'production' && secrets.PROD_USERNAME || secrets.TEST_USERNAME }}
+          key: ${{ github.event.inputs.environment == 'production' && secrets.PROD_SSH_KEY || secrets.TEST_SSH_KEY }}
+          port: ${{ github.event.inputs.environment == 'production' && secrets.PROD_PORT || secrets.TEST_PORT }}
+          script: |
+            cd /opt/tg-bot-cloud
+
+            # 备份当前部署配置
+            cp docker-compose.yml docker-compose.yml.rollback-$(date +%Y%m%d%H%M%S)
+
+            # 记录回滚操作到历史记录
+            echo "回滚到 ${{ github.event.inputs.version }} - $(date '+%Y-%m-%d %H:%M:%S')" >> deployment-history.txt
+
+            # 更新镜像标签为回滚版本
+            ROLLBACK_VERSION="${{ github.event.inputs.version }}"
+            sed -i -E "s/:v[0-9]+\.[0-9]+\.[0-9]+|:latest|:dev-ops|:stable/:$ROLLBACK_VERSION/g" docker-compose.yml
+
+            # 部署回滚版本
+            docker-compose pull
+            docker-compose up -d
+
+            # 回滚完成后打印状态
+            echo "已回滚到版本 $ROLLBACK_VERSION"
+            docker-compose ps
+
+  notify:
+    needs: rollback
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 发送回滚通知
+        run: |
+          echo "已成功回滚到版本 ${{ github.event.inputs.version }}"
+          # 这里可以添加发送邮件或其他通知方式的代码
+          # 例如使用 curl 发送到企业微信、钉钉等
