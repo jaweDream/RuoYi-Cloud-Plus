@@ -3,6 +3,11 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ "dev-ops" ]
+    paths:
+      - 'ruoyi-**/**'
+      - 'pom.xml'
+      - '.docker/**'
+      - 'Dockerfile'
     tags: [ "v*.*.*" ]
   pull_request:
     branches: [ "dev-ops" ]
