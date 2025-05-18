@@ -124,8 +124,9 @@ jobs:
         run: |
           # 设置仓库类型变量
           if [ "${{ github.event.inputs.registry_type }}" == "github" ] || [ -z "${{ github.event.inputs.registry_type }}" ]; then
+            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
             echo "registry_url=ghcr.io" >> $GITHUB_OUTPUT
-            echo "image_prefix=ghcr.io/${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+            echo "image_prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
             echo "username=${{ github.repository_owner }}" >> $GITHUB_OUTPUT
             echo "password=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
           elif [ "${{ github.event.inputs.registry_type }}" == "dockerhub" ]; then
