@@ -17,6 +17,8 @@ on:
         required: false
       custom_token:
         required: false
+      github_token:
+        required: false
     outputs:
       registry_url:
         description: "镜像仓库URL"
@@ -56,4 +58,4 @@ jobs:
         with:
           registry: ${{ steps.set-outputs.outputs.registry_url }}
           username: ${{ inputs.registry_type == 'github' && github.repository_owner || (inputs.registry_type == 'dockerhub' && secrets.DOCKERHUB_USERNAME || secrets.custom_username) }}
-          password: ${{ inputs.registry_type == 'github' && secrets.GITHUB_TOKEN || (inputs.registry_type == 'dockerhub' && secrets.DOCKERHUB_TOKEN || secrets.custom_token) }}
+          password: ${{ inputs.registry_type == 'github' && secrets.github_token || (inputs.registry_type == 'dockerhub' && secrets.DOCKERHUB_TOKEN || secrets.custom_token) }}
