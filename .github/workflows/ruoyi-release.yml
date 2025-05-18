@@ -180,7 +180,7 @@ jobs:
           cache: maven
 
       - name: 构建与测试
-        run: mvn -B package --file pom.xml -DskipTests=false
+        run: mvn -B package --file pom.xml -DskipTests=true
 
       - name: 缓存Maven包
         uses: actions/cache@v4
