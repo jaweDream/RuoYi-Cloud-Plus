@@ -76,8 +76,47 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: 安装Maven
+        run: |
+          # 检查Maven是否已安装
+          if ! command -v mvn &> /dev/null; then
+            echo "正在安装Maven..."
+            # 创建临时目录
+            mkdir -p /tmp/maven_install
+            cd /tmp/maven_install
+
+            # 下载Maven
+            curl -O https://dlcdn.apache.org/maven/maven-3/3.9.5/binaries/apache-maven-3.9.5-bin.tar.gz
+
+            # 解压
+            tar -xzf apache-maven-3.9.5-bin.tar.gz
+
+            # 移动到本地位置
+            mkdir -p $HOME/maven
+            mv apache-maven-3.9.5/* $HOME/maven/
+
+            # 添加到PATH（临时）
+            export PATH=$HOME/maven/bin:$PATH
+
+            # 清理
+            cd $GITHUB_WORKSPACE
+            rm -rf /tmp/maven_install
+
+            echo "Maven已安装，版本："
+            mvn --version
+          else
+            echo "Maven已存在，版本："
+            mvn --version
+          fi
+
+          # 确保PATH在后续步骤中包含Maven
+          echo "PATH=$HOME/maven/bin:$PATH" >> $GITHUB_ENV
+
       - name: 构建与测试
-        run: mvn -B package --file pom.xml -DskipTests=${{ github.event.inputs.skip_tests == 'true' }}
+        run: |
+          # 确保Maven在PATH中
+          export PATH=$HOME/maven/bin:$PATH
+          mvn -B package --file pom.xml -DskipTests=${{ github.event.inputs.skip_tests == 'true' }}
 
       - name: 缓存Maven包
         uses: actions/cache@v4

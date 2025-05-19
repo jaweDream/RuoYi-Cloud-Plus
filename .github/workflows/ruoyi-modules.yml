@@ -34,6 +34,26 @@ on:
         description: '自定义镜像仓库URL'
         required: false
         type: string
+      specific_module:
+        description: '指定构建的模块(留空则构建所有模块)'
+        required: false
+        type: string
+        default: ''
+      skip_tests:
+        description: '是否跳过测试'
+        required: false
+        type: boolean
+        default: true
+      image_tag:
+        description: '镜像标签(留空使用latest)'
+        required: false
+        type: string
+        default: 'latest'
+      deploy_after_build:
+        description: '构建后是否部署'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -41,7 +61,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         java: [ '21' ]
@@ -57,8 +77,47 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: 安装Maven
+        run: |
+          # 检查Maven是否已安装
+          if ! command -v mvn &> /dev/null; then
+            echo "正在安装Maven..."
+            # 创建临时目录
+            mkdir -p /tmp/maven_install
+            cd /tmp/maven_install
+
+            # 下载Maven
+            curl -O https://dlcdn.apache.org/maven/maven-3/3.9.5/binaries/apache-maven-3.9.5-bin.tar.gz
+
+            # 解压
+            tar -xzf apache-maven-3.9.5-bin.tar.gz
+
+            # 移动到本地位置
+            mkdir -p $HOME/maven
+            mv apache-maven-3.9.5/* $HOME/maven/
+
+            # 添加到PATH（临时）
+            export PATH=$HOME/maven/bin:$PATH
+
+            # 清理
+            cd $GITHUB_WORKSPACE
+            rm -rf /tmp/maven_install
+
+            echo "Maven已安装，版本："
+            mvn --version
+          else
+            echo "Maven已存在，版本："
+            mvn --version
+          fi
+
+          # 确保PATH在后续步骤中包含Maven
+          echo "PATH=$HOME/maven/bin:$PATH" >> $GITHUB_ENV
+
       - name: 构建与测试
-        run: mvn -B package --file pom.xml -DskipTests=true
+        run: |
+          # 确保Maven在PATH中
+          export PATH=$HOME/maven/bin:$PATH
+          mvn -B package --file pom.xml -DskipTests=${{ github.event.inputs.skip_tests == 'true' }}
 
       - name: 缓存Maven包
         uses: actions/cache@v4
@@ -82,15 +141,51 @@ jobs:
           retention-days: 5
 
   prepare-modules:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
     outputs:
       modules: ${{ steps.set-modules.outputs.modules }}
 
     steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
       - name: 设置要构建的模块
         id: set-modules
         run: |
+          # 检查是否指定了特定模块
+          if [ -n "${{ github.event.inputs.specific_module }}" ]; then
+            # 检查指定模块
+            SPECIFIC_MODULE="${{ github.event.inputs.specific_module }}"
+
+            # 验证模块是否存在
+            if [[ "${SPECIFIC_MODULE}" == ruoyi-* && ! "${SPECIFIC_MODULE}" =~ ^ruoyi-modules/ ]]; then
+              # 直接的ruoyi-模块（如ruoyi-gateway, ruoyi-auth等）
+              if [ -d "./${SPECIFIC_MODULE}" ] && [ -f "./${SPECIFIC_MODULE}/pom.xml" ]; then
+                echo "modules=[\"${SPECIFIC_MODULE}\"]" >> $GITHUB_OUTPUT
+                echo "将构建指定模块: ${SPECIFIC_MODULE}"
+                exit 0
+              fi
+            elif [[ "${SPECIFIC_MODULE}" =~ ^ruoyi-modules/ ]]; then
+              # 带前缀的ruoyi-modules模块
+              if [ -d "${SPECIFIC_MODULE}" ] && [ -f "${SPECIFIC_MODULE}/pom.xml" ]; then
+                echo "modules=[\"${SPECIFIC_MODULE}\"]" >> $GITHUB_OUTPUT
+                echo "将构建指定模块: ${SPECIFIC_MODULE}"
+                exit 0
+              fi
+            else
+              # 尝试作为ruoyi-modules子模块
+              if [ -d "./ruoyi-modules/${SPECIFIC_MODULE}" ] && [ -f "./ruoyi-modules/${SPECIFIC_MODULE}/pom.xml" ]; then
+                SPECIFIC_MODULE="ruoyi-modules/${SPECIFIC_MODULE}"
+                echo "modules=[\"${SPECIFIC_MODULE}\"]" >> $GITHUB_OUTPUT
+                echo "将构建指定模块: ${SPECIFIC_MODULE}"
+                exit 0
+              fi
+            fi
+
+            echo "警告：指定的模块 ${SPECIFIC_MODULE} 不存在，将构建所有模块"
+          fi
+
           # 业务模块列表 (包含gateway和auth)
           MODULES='["ruoyi-gateway","ruoyi-auth","ruoyi-system","ruoyi-gen","ruoyi-job","ruoyi-resource","ruoyi-workflow"]'
           echo "modules=${MODULES}" >> $GITHUB_OUTPUT
@@ -99,7 +194,7 @@ jobs:
   docker-build:
     needs: [build, prepare-modules]
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         module: ${{ fromJSON(needs.prepare-modules.outputs.modules) }}
@@ -137,6 +232,15 @@ jobs:
             echo "password=${{ secrets.CUSTOM_REGISTRY_TOKEN }}" >> $GITHUB_OUTPUT
           fi
 
+          # 设置镜像标签
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.ref_name }}" ]; then
+            echo "image_tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "image_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: 登录到 Docker 仓库
         uses: docker/login-action@v3
         with:
@@ -148,6 +252,10 @@ jobs:
         id: build-params
         run: |
           MODULE="${{ matrix.module }}"
+
+          # 提取模块基本名称（用于输出）
+          BASE_MODULE=$(basename "${MODULE}")
+          echo "base_module=${BASE_MODULE}" >> $GITHUB_OUTPUT
 
           # 确定 Dockerfile 路径
           if [[ -f "./${MODULE}/Dockerfile" ]]; then
@@ -188,13 +296,13 @@ jobs:
             JAR_FILE=./target/${{ matrix.module }}.jar
           push: true
           tags: |
-            ${{ steps.login-vars.outputs.image_prefix }}/${{ matrix.module }}:${{ github.ref_name || 'latest' }}
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ matrix.module }}:${{ steps.login-vars.outputs.image_tag }}
             ${{ steps.login-vars.outputs.image_prefix }}/${{ matrix.module }}:latest
 
   deploy:
     needs: docker-build
-    if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' && contains(github.ref, 'dev-ops')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_after_build == 'true')
+    runs-on: self-hosted
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 
