@@ -32,6 +32,26 @@ on:
         description: '自定义镜像仓库URL'
         required: false
         type: string
+      specific_module:
+        description: '指定构建的模块(留空则构建所有模块)'
+        required: false
+        type: string
+        default: ''
+      skip_tests:
+        description: '是否跳过测试'
+        required: false
+        type: boolean
+        default: true
+      image_tag:
+        description: '镜像标签(留空使用latest)'
+        required: false
+        type: string
+        default: 'latest'
+      deploy_after_build:
+        description: '构建后是否部署'
+        required: false
+        type: boolean
+        default: true
 
 # 明确设置权限
 permissions:
@@ -40,7 +60,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: wsl.com
     strategy:
       matrix:
         java: [ '21' ]
@@ -57,7 +77,7 @@ jobs:
           cache: maven
 
       - name: 构建与测试
-        run: mvn -B package --file pom.xml -DskipTests=true
+        run: mvn -B package --file pom.xml -DskipTests=${{ github.event.inputs.skip_tests == 'true' }}
 
       - name: 缓存Maven包
         uses: actions/cache@v4
@@ -81,7 +101,7 @@ jobs:
           retention-days: 5
 
   prepare-modules:
-    runs-on: ubuntu-latest
+    runs-on: wsl.com
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
     outputs:
       modules: ${{ steps.set-modules.outputs.modules }}
@@ -93,6 +113,23 @@ jobs:
       - name: 设置要构建的模块
         id: set-modules
         run: |
+          # 检查是否指定了特定模块
+          if [ -n "${{ github.event.inputs.specific_module }}" ]; then
+            # 检查指定模块是否存在
+            SPECIFIC_MODULE="${{ github.event.inputs.specific_module }}"
+            if [[ ! "$SPECIFIC_MODULE" =~ ^ruoyi-visual/ ]]; then
+              SPECIFIC_MODULE="ruoyi-visual/${SPECIFIC_MODULE}"
+            fi
+
+            if [ -d "$SPECIFIC_MODULE" ] && [ -f "${SPECIFIC_MODULE}/pom.xml" ]; then
+              echo "modules=[\"${SPECIFIC_MODULE}\"]" >> $GITHUB_OUTPUT
+              echo "将构建指定模块: ${SPECIFIC_MODULE}"
+              exit 0
+            else
+              echo "警告：指定的模块 ${SPECIFIC_MODULE} 不存在，将构建所有模块"
+            fi
+          fi
+
           # 检测ruoyi-visual目录下的所有可能的模块
           MODULES=()
 
@@ -132,7 +169,7 @@ jobs:
   docker-build:
     needs: [build, prepare-modules]
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: wsl.com
     strategy:
       matrix:
         module: ${{ fromJSON(needs.prepare-modules.outputs.modules) }}
@@ -168,6 +205,15 @@ jobs:
             echo "image_prefix=${{ github.event.inputs.custom_registry }}/${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
             echo "username=${{ secrets.CUSTOM_REGISTRY_USERNAME }}" >> $GITHUB_OUTPUT
             echo "password=${{ secrets.CUSTOM_REGISTRY_TOKEN }}" >> $GITHUB_OUTPUT
+          fi
+
+          # 设置镜像标签
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.ref_name }}" ]; then
+            echo "image_tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "image_tag=latest" >> $GITHUB_OUTPUT
           fi
 
       - name: 登录到 Docker 仓库
@@ -215,13 +261,13 @@ jobs:
             JAR_FILE=./target/${{ steps.build-params.outputs.base_module }}.jar
           push: true
           tags: |
-            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:${{ github.ref_name || 'latest' }}
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:${{ steps.login-vars.outputs.image_tag }}
             ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:latest
 
   deploy:
     needs: docker-build
-    if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' && contains(github.ref, 'dev-ops')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_after_build == 'true')
+    runs-on: wsl.com
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 
