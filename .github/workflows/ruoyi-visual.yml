@@ -184,6 +184,7 @@ jobs:
 
           # 提取模块基本名称（去掉路径前缀）
           BASE_MODULE=$(basename "${MODULE}")
+          echo "base_module=${BASE_MODULE}" >> $GITHUB_OUTPUT
 
           # 确定 Dockerfile 路径
           if [[ -f "${MODULE}/Dockerfile" ]]; then
@@ -210,12 +211,12 @@ jobs:
           context: .
           file: ${{ steps.build-params.outputs.dockerfile }}
           build-args: |
-            MODULE=$(basename "${{ matrix.module }}")
-            JAR_FILE=./target/$(basename "${{ matrix.module }}").jar
+            MODULE=${{ steps.build-params.outputs.base_module }}
+            JAR_FILE=./target/${{ steps.build-params.outputs.base_module }}.jar
           push: true
           tags: |
-            ${{ steps.login-vars.outputs.image_prefix }}/$(basename "${{ matrix.module }}"):${{ github.ref_name || 'latest' }}
-            ${{ steps.login-vars.outputs.image_prefix }}/$(basename "${{ matrix.module }}"):latest
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:${{ github.ref_name || 'latest' }}
+            ${{ steps.login-vars.outputs.image_prefix }}/${{ steps.build-params.outputs.base_module }}:latest
 
   deploy:
     needs: docker-build
