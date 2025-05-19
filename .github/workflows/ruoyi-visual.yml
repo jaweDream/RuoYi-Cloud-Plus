@@ -32,6 +32,26 @@ on:
         description: '自定义镜像仓库URL'
         required: false
         type: string
+      specific_module:
+        description: '指定构建的模块(留空则构建所有模块)'
+        required: false
+        type: string
+        default: ''
+      skip_tests:
+        description: '是否跳过测试'
+        required: false
+        type: boolean
+        default: true
+      image_tag:
+        description: '镜像标签(留空使用latest)'
+        required: false
+        type: string
+        default: 'latest'
+      deploy_after_build:
+        description: '构建后是否部署'
+        required: false
+        type: boolean
+        default: true
 
 # 明确设置权限
 permissions:
