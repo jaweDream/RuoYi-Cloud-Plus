@@ -60,7 +60,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: wsl.com
     strategy:
       matrix:
         java: [ '21' ]
@@ -101,7 +101,7 @@ jobs:
           retention-days: 5
 
   prepare-modules:
-    runs-on: self-hosted
+    runs-on: wsl.com
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
     outputs:
       modules: ${{ steps.set-modules.outputs.modules }}
@@ -169,7 +169,7 @@ jobs:
   docker-build:
     needs: [build, prepare-modules]
     if: github.event_name == 'push' && contains(github.ref, 'dev-ops') || github.event_name == 'workflow_dispatch'
-    runs-on: self-hosted
+    runs-on: wsl.com
     strategy:
       matrix:
         module: ${{ fromJSON(needs.prepare-modules.outputs.modules) }}
@@ -267,7 +267,7 @@ jobs:
   deploy:
     needs: docker-build
     if: (github.event_name == 'push' && contains(github.ref, 'dev-ops')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_after_build == 'true')
-    runs-on: self-hosted
+    runs-on: wsl.com
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 
